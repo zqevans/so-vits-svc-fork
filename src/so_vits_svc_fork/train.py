@@ -9,8 +9,9 @@ from typing import Any
 
 import lightning.pytorch as pl
 import torch
+import wandb
 from lightning.pytorch.accelerators import MPSAccelerator, TPUAccelerator
-from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from lightning.pytorch.strategies.ddp import DDPStrategy
 from lightning.pytorch.tuner import Tuner
 from torch.cuda.amp import autocast
@@ -86,10 +87,20 @@ def train(
         else "auto"
     )
     LOG.info(f"Using strategy: {strategy}")
-    trainer = pl.Trainer(
-        logger=TensorBoardLogger(
+
+    logger = None
+
+    # Get the wandb logger if enabled
+    if hparams.train.get("wandb", False):
+        logger = WandbLogger(project=hparams.train.name, save_dir=model_path)
+        logger.log_hyperparams(hparams)
+    else:
+        logger = TensorBoardLogger(
             model_path, "lightning_logs", hparams.train.get("log_version", 0)
-        ),
+        )
+
+    trainer = pl.Trainer(
+        logger=logger,
         # profiler="simple",
         val_check_interval=hparams.train.eval_interval,
         max_epochs=hparams.train.epochs,
@@ -359,38 +370,49 @@ class VitsLightning(pl.LightningModule):
     def log_image_dict(
         self, image_dict: dict[str, Any], dataformats: str = "HWC"
     ) -> None:
-        if not isinstance(self.logger, TensorBoardLogger):
-            warnings.warn("Image logging is only supported with TensorBoardLogger.")
+        
+        if isinstance(self.logger, TensorBoardLogger):
+            writer: SummaryWriter = self.logger.experiment
+            for k, v in image_dict.items():
+                try:
+                    writer.add_image(k, v, self.total_batch_idx, dataformats=dataformats)
+                except Exception as e:
+                    warnings.warn(f"Failed to log image {k}: {e}")
+        elif isinstance(self.logger, WandbLogger):
+            for k, v in image_dict.items():
+                self.logger.experiment.log({k: wandb.Image(v)})
+        else:
+            warnings.warn("Image logging is only supported with TensorBoardLogger and WandbLogger.")
             return
-        writer: SummaryWriter = self.logger.experiment
-        for k, v in image_dict.items():
-            try:
-                writer.add_image(k, v, self.total_batch_idx, dataformats=dataformats)
-            except Exception as e:
-                warnings.warn(f"Failed to log image {k}: {e}")
 
     def log_audio_dict(self, audio_dict: dict[str, Any]) -> None:
-        if not isinstance(self.logger, TensorBoardLogger):
-            warnings.warn("Audio logging is only supported with TensorBoardLogger.")
+        
+        if isinstance(self.logger, TensorBoardLogger):
+            writer: SummaryWriter = self.logger.experiment
+            for k, v in audio_dict.items():
+                writer.add_audio(
+                    k,
+                    v.float(),
+                    self.total_batch_idx,
+                    sample_rate=self.hparams.data.sampling_rate,
+                )
+        elif isinstance(self.logger, WandbLogger):
+            for k, v in audio_dict.items():
+                self.logger.experiment.log({k: wandb.Audio(v.squeeze().float().cpu().numpy(), sample_rate=self.hparams.data.sampling_rate)})
+        else:
+            warnings.warn("Audio logging is only supported with TensorBoardLogger and WandbLogger.")
             return
-        writer: SummaryWriter = self.logger.experiment
-        for k, v in audio_dict.items():
-            writer.add_audio(
-                k,
-                v.float(),
-                self.total_batch_idx,
-                sample_rate=self.hparams.data.sampling_rate,
-            )
 
     def log_dict_(self, log_dict: dict[str, Any], **kwargs) -> None:
-        if not isinstance(self.logger, TensorBoardLogger):
-            warnings.warn("Logging is only supported with TensorBoardLogger.")
-            return
-        writer: SummaryWriter = self.logger.experiment
-        for k, v in log_dict.items():
-            writer.add_scalar(k, v, self.total_batch_idx)
+        if isinstance(self.logger, TensorBoardLogger):
+            writer: SummaryWriter = self.logger.experiment
+            for k, v in log_dict.items():
+                writer.add_scalar(k, v, self.total_batch_idx)
+            self.log_dict(log_dict, **kwargs)
+        elif isinstance(self.logger, WandbLogger):
+            self.logger.experiment.log(log_dict, step=self.total_batch_idx)
+
         kwargs["logger"] = False
-        self.log_dict(log_dict, **kwargs)
 
     def log_(self, key: str, value: Any, **kwargs) -> None:
         self.log_dict_({key: value}, **kwargs)
