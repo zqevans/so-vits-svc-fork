@@ -51,6 +51,7 @@ class SynthesizerTrn(nn.Module):
         gen_istft_n_fft: int = 16,
         gen_istft_hop_size: int = 4,
         subbands: int = 4,
+        use_clap_audio_embeds: bool = False,
         **kwargs: Any,
     ):
         super().__init__()
@@ -77,10 +78,15 @@ class SynthesizerTrn(nn.Module):
         self.gen_istft_n_fft = gen_istft_n_fft
         self.gen_istft_hop_size = gen_istft_hop_size
         self.subbands = subbands
+        self.use_clap_audio_embeds = use_clap_audio_embeds
         if kwargs:
             warnings.warn(f"Unused arguments: {kwargs}")
 
-        self.emb_g = nn.Embedding(n_speakers, gin_channels)
+        if use_clap_audio_embeds:
+            # CLAP embeds are 512-dim
+            self.emb_g = nn.Linear(512, gin_channels)
+        else:
+            self.emb_g = nn.Embedding(n_speakers, gin_channels)
 
         if ssl_dim is None:
             self.pre = nn.LazyConv1d(hidden_channels, kernel_size=5, padding=2)
@@ -188,14 +194,14 @@ class SynthesizerTrn(nn.Module):
 
         # MB-iSTFT-VITS
         if self.mb:
-            o, o_mb = self.dec(z_slice, g=g)
+            output, output_mb = self.dec(z_slice, g=g)
         # HiFi-GAN
         else:
-            o = self.dec(z_slice, g=g, f0=pitch_slice)
-            o_mb = None
+            output = self.dec(z_slice, g=g, f0=pitch_slice)
+            output_mb = None
         return (
-            o,
-            o_mb,
+            output,
+            output_mb,
             ids_slice,
             spec_mask,
             (z, z_p, m_p, logs_p, m_q, logs_q),

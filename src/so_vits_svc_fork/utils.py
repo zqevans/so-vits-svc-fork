@@ -21,11 +21,13 @@ from cm_time import timer
 from numpy import ndarray
 from tqdm import tqdm
 from transformers import HubertModel
+from laion_clap import CLAP_Module
 
 from so_vits_svc_fork.hparams import HParams
 
 LOG = getLogger(__name__)
 HUBERT_SAMPLING_RATE = 16000
+CLAP_SAMPLING_RATE = 48000
 
 
 def get_optimal_device(index: int = 0) -> torch.device:
@@ -187,6 +189,45 @@ def get_content(
         f"HuBERT inference time  : {t.elapsed:.3f}s, RTF: {t.elapsed / wav_len:.3f}"
     )
     return c
+    
+# Add CLAP code
+def get_clap_model(
+        device: str | torch.device,
+        clap_ckpt_path: str | Path,
+        clap_amodel = "HTSAT-tiny",
+        clap_fusion = False,
+):
+    clap_module = CLAP_Module(enable_fusion=clap_fusion, device=device, amodel=clap_amodel).requires_grad_(False).eval()
+
+    if clap_ckpt_path:
+        clap_module.load_ckpt(ckpt=clap_ckpt_path)
+    else:
+        clap_module.load_ckpt(model_id=1)
+
+    return clap_module
+    
+def get_clap_audio_embeddings(
+    clap_module: CLAP_Module,
+    audio: torch.Tensor | ndarray[Any, Any],
+    device: torch.device | str,
+    sr: int,
+) -> torch.Tensor:
+    audio = torch.as_tensor(audio)
+    if sr != CLAP_SAMPLING_RATE:
+        audio = (
+            torchaudio.transforms.Resample(sr, CLAP_SAMPLING_RATE)
+            .to(audio.device)(audio)
+            .to(device)
+        )
+    if audio.ndim == 1:
+        audio = audio.unsqueeze(0)
+    with torch.no_grad(), timer() as t:
+        clap_embeds = clap_module.get_audio_embedding_from_data(audio, use_tensor=True)
+    wav_len = audio.shape[-1] / CLAP_SAMPLING_RATE
+    LOG.info(
+        f"CLAP inference time  : {t.elapsed:.3f}s, RTF: {t.elapsed / wav_len:.3f}"
+    )
+    return clap_embeds
 
 
 def _substitute_if_same_shape(to_: dict[str, Any], from_: dict[str, Any]) -> None:

@@ -9,6 +9,7 @@ import librosa
 import numpy as np
 import torch
 import torchaudio
+from laion_clap import CLAP_Module
 from joblib import Parallel, cpu_count, delayed
 from tqdm import tqdm
 from transformers import HubertModel
@@ -34,6 +35,7 @@ def _process_one(
     f0_method: Literal["crepe", "crepe-tiny", "parselmouth", "dio", "harvest"] = "dio",
     force_rebuild: bool = False,
     hps: HParams,
+    clap_model: CLAP_Module
 ):
     audio, sr = librosa.load(filepath, sr=hps.data.sampling_rate, mono=True)
 
@@ -63,6 +65,10 @@ def _process_one(
         legacy_final_proj=hps.data.get("contentvec_final_proj", True),
     )
     c = utils.repeat_expand_2d(c.squeeze(0), f0.shape[0])
+    torch.cuda.empty_cache()
+
+    # Compute CLAP embeddings
+    clap_embeds = utils.get_clap_audio_embeddings(clap_model, audio, device, sr=sr)
     torch.cuda.empty_cache()
 
     # Compute spectrogram
@@ -96,6 +102,7 @@ def _process_one(
         "content": c,
         "audio": audio,
         "spk": spk,
+        "clap_embeds": clap_embeds,
     }
     data = {k: v.cpu() for k, v in data.items()}
     with data_path.open("wb") as f:
@@ -108,9 +115,17 @@ def _process_batch(filepaths: Iterable[Path], pbar_position: int, **kwargs):
         get_optimal_device(), hps.data.get("contentvec_final_proj", True)
     )
 
+    clap_model = utils.get_clap_model(
+        get_optimal_device(), 
+        clap_ckpt_path=hps.model.get("clap_ckpt_path", ""),
+        clap_amodel=hps.model.get("clap_amodel", "HTSAT-tiny"),
+        clap_fusion=hps.model.get("clap_fusion", False),
+    )
+
     for filepath in tqdm(filepaths, position=pbar_position):
         _process_one(
             content_model=content_model,
+            clap_model=clap_model,
             filepath=filepath,
             **kwargs,
         )
