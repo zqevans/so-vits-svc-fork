@@ -40,7 +40,7 @@ class TextAudioDataset(Dataset):
             for key in data.keys():
                 if key == "audio":
                     data[key] = data[key][:, start * hop_len : end * hop_len]
-                elif key == "spk":
+                elif key in ["spk", "clap_embeds"]:
                     continue
                 else:
                     data[key] = data[key][..., start:end]
@@ -62,6 +62,10 @@ def _pad_stack(array: Sequence[torch.Tensor]) -> torch.Tensor:
 
 
 class TextAudioCollate(nn.Module):
+    def __init__(self, hps: HParams):
+        super().__init__()
+        self.hps = hps
+
     def forward(
         self, batch: Sequence[dict[str, torch.Tensor]]
     ) -> tuple[torch.Tensor, ...]:
@@ -81,7 +85,7 @@ class TextAudioCollate(nn.Module):
             results["spec"],
             results["mel_spec"],
             results["audio"],
-            results["spk"],
+            results["spk"] if not self.hps.model.get("use_clap_audio_embeds", False) else results["clap_embeds"],
             lengths,
-            results["uv"],
+            results["uv"]
         )

@@ -44,7 +44,7 @@ class VCDataModule(pl.LightningDataModule):
         self.batch_size = hparams.train.batch_size
         if not isinstance(self.batch_size, int):
             self.batch_size = 1
-        self.collate_fn = TextAudioCollate()
+        self.collate_fn = TextAudioCollate(hparams)
 
         # these should be called in setup(), but we need to calculate check_val_every_n_epoch
         self.train_dataset = TextAudioDataset(self.__hparams, is_validation=False)
@@ -410,7 +410,7 @@ class VitsLightning(pl.LightningModule):
                 writer.add_scalar(k, v, self.total_batch_idx)
             self.log_dict(log_dict, **kwargs)
         elif isinstance(self.logger, WandbLogger):
-            self.logger.experiment.log(log_dict, step=self.total_batch_idx)
+            self.logger.experiment.log({k: v.item() if isinstance(v, torch.Tensor) else v for k, v in log_dict.items()})
 
         kwargs["logger"] = False
 
