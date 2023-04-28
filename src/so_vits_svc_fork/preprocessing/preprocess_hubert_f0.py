@@ -73,6 +73,10 @@ def _process_one(
     #print(f"clap embeds shape: {clap_embeds.shape}")
     torch.cuda.empty_cache()
 
+    # Compute CLAP embeddings
+    clap_embeds = utils.get_clap_audio_embeddings(clap_model, audio, device, sr=sr)
+    torch.cuda.empty_cache()
+
     # Compute spectrogram
     audio, sr = torchaudio.load(filepath)
     spec = spectrogram_torch(audio, hps).squeeze(0)
